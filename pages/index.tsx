@@ -13,6 +13,7 @@ import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { ShoppingCartIcon, RefreshCwIcon } from 'lucide-react';
+import { Analytics } from "@vercel/analytics/next"
 
 export default function Home() {
   const [deckUrl, setDeckUrl] = useState('');
@@ -68,6 +69,7 @@ export default function Home() {
         <meta name="viewport" content="width=device-width, initial-scale=1" />
         <link rel="icon" href="/favicon.ico" />
       </Head>
+      <Analytics />
       
       <div className="min-h-screen bg-background">
         {/* Header */}

@@ -80,9 +80,6 @@ export default function Home() {
                   alt="Outpost Gaming Belgium Logo" 
                   className="h-10 w-auto"
                 />
-                <h1 className="text-2xl font-bold text-foreground">
-                  Outpost MTG Inventory Checker
-                </h1>
               </div>
               <div className="flex items-center space-x-4">
                 {lastDataRefresh && (
@@ -110,10 +107,10 @@ export default function Home() {
                   )}
                 </Button>
                 
-                <Button onClick={handleRefresh} size="sm">
+                {/* <Button onClick={handleRefresh} size="sm">
                   <RefreshCwIcon className="h-4 w-4 mr-2" />
                   Refresh Data
-                </Button>
+                </Button> */}
               </div>
             </div>
           </div>

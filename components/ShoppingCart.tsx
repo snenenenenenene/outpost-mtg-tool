@@ -175,9 +175,9 @@ const ShoppingCart = ({ isOpen, onClose }: ShoppingCartProps) => {
 
                 {/* Actions */}
                 <div className="space-y-2">
-                  <Button onClick={handleCheckout} className="w-full">
+                  {/* <Button onClick={handleCheckout} className="w-full">
                     Proceed to Checkout
-                  </Button>
+                  </Button> */}
                   
                   <Button 
                     variant="outline" 

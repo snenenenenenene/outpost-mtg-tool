@@ -77,11 +77,25 @@ const useStore = create<AppState>((set: any, get: any) => ({
     ];
 
     const cardAvailability: CardAvailability[] = allCards.map(card => {
+      // Step 1: Try exact name match first (most accurate)
       let availableCards = outpostData.filter((outpostCard: OutpostCard) => 
-        outpostCard.name.toLowerCase().includes(card.name.toLowerCase()) ||
-        card.name.toLowerCase().includes(outpostCard.name.toLowerCase())
+        outpostCard.name.toLowerCase() === card.name.toLowerCase()
       );
-
+      
+      // Step 2: If no exact match, try exact substring match (card name contains search term)
+      if (availableCards.length === 0) {
+        availableCards = outpostData.filter((outpostCard: OutpostCard) => 
+          outpostCard.name.toLowerCase().includes(card.name.toLowerCase())
+        );
+      }
+      
+      // Step 3: Only as last resort, try bidirectional fuzzy matching
+      if (availableCards.length === 0) {
+        availableCards = outpostData.filter((outpostCard: OutpostCard) => 
+          card.name.toLowerCase().includes(outpostCard.name.toLowerCase())
+        );
+      }
+      
       // Auto-exclude cards with zero prices
       availableCards = availableCards.filter((outpostCard: OutpostCard) => {
         const hasValidPrice = outpostCard.conditions?.some(condition => condition.price > 0) || false;

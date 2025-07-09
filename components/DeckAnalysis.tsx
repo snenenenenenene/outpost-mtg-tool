@@ -769,27 +769,17 @@ function parseDeckList(deckListText: string, deckName: string = 'Imported Deck')
     // Skip comment lines
     if (trimmedLine.startsWith('//') || trimmedLine.startsWith('#')) continue;
     
-    // Parse format: "1 Alania (OTJ) 204 *F*"
-    // or "1 Cayth, Famed Mechanist (M3C) 6"
+    // Parse format: "10 Plains (LCI) 287 *F*"
+    // or "1 Lightning Bolt (M21) 168"
     // or simpler: "1 Lightning Bolt"
     const match = trimmedLine.match(/^(\d+)\s+(.+?)(?:\s+\(([^)]+)\)(?:\s+(\d+))?)?(?:\s+\*F\*)?$/);
     
     if (match) {
       const quantity = parseInt(match[1]);
       let cardName = match[2].trim();
-      const setInfo = match[3]; // Could be just set code or "SET COLLECTORNUM"
-      let setCode: string | undefined;
-      let collectorNumber: string | undefined;
+      const setCode = match[3]; // Set code from inside parentheses
+      const collectorNumber = match[4]; // Collector number after parentheses
       const foil = trimmedLine.includes('*F*');
-      
-      // Parse set info - could be "OTJ 204" or just "M3C"
-      if (setInfo) {
-        const setParts = setInfo.trim().split(/\s+/);
-        setCode = setParts[0];
-        if (setParts.length > 1) {
-          collectorNumber = setParts[1];
-        }
-      }
       
       // Clean up card name (remove any trailing set info that wasn't caught)
       cardName = cardName.replace(/\s+\([^)]+\)\s*\d*\s*\*?F?\*?$/, '').trim();
@@ -802,7 +792,7 @@ function parseDeckList(deckListText: string, deckName: string = 'Imported Deck')
         foil
       };
       
-      console.log(`📝 Parsed deck card:`, parsedCard);
+      console.log(`📝 Parsed deck card from "${trimmedLine}":`, parsedCard);
       cards.push(parsedCard);
     }
   }

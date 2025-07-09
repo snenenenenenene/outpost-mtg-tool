@@ -13,7 +13,7 @@ import { Progress } from '@/components/ui/progress';
 import { Separator } from '@/components/ui/separator';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { CheckCircleIcon, XCircleIcon, AlertCircleIcon, FileTextIcon, SparklesIcon, ImageIcon, ExternalLinkIcon, TrendingUpIcon, MapIcon, ArrowUpDownIcon } from 'lucide-react';
+import { CheckCircleIcon, XCircleIcon, AlertCircleIcon, FileTextIcon, SparklesIcon, ImageIcon, ExternalLinkIcon, TrendingUpIcon, MapIcon, ArrowUpDownIcon, EyeOffIcon, EyeIcon, MinusCircleIcon, PlusCircleIcon, KeyboardIcon } from 'lucide-react';
 import { 
   ScryfallCard, 
   getCardForThumbnail, 
@@ -69,9 +69,36 @@ function DeckAnalysisResults({ analysis, excludeBasicLands, aggressiveArtMatchin
   const [hoveredPosition, setHoveredPosition] = useState({ x: 0, y: 0 });
   const [sortBy, setSortBy] = useState<SortOption>('none');
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('desc');
+  const [hiddenCards, setHiddenCards] = useState<Set<number>>(new Set());
+  const [showHidden, setShowHidden] = useState(false);
 
   // Basic land types for filtering
   const BASIC_LAND_NAMES = ['Plains', 'Island', 'Swamp', 'Mountain', 'Forest', 'Wastes'];
+
+  // Keyboard shortcuts
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      // Only trigger shortcuts when not focused on input elements
+      if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement) {
+        return;
+      }
+      
+      if (event.key === 'h' && !event.ctrlKey && !event.metaKey) {
+        event.preventDefault();
+        hideAllMissingCards();
+      } else if (event.key === 's' && !event.ctrlKey && !event.metaKey) {
+        event.preventDefault();
+        showAllCards();
+      } else if (event.key === 'Escape') {
+        event.preventDefault();
+        setIsModalOpen(false);
+        setSelectedCard(null);
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
 
   // Helper function to check if art matches between cards
   const checkArtMatch = (scryfallCard: ScryfallCard, originalCard: DeckCard): boolean => {
@@ -228,10 +255,16 @@ function DeckAnalysisResults({ analysis, excludeBasicLands, aggressiveArtMatchin
     loadScryfallData();
   }, [analysis.cardAvailability, aggressiveArtMatching, originalDeckCards]);
 
-  // Filter cards based on exclude basic lands setting
-  const filteredCards = excludeBasicLands 
-    ? enhancedCards.filter(card => !card.isBasicLand)
-    : enhancedCards;
+  // Filter cards based on exclude basic lands and hidden cards settings
+  const filteredCards = enhancedCards.filter((card, index) => {
+    // Apply basic lands filter
+    if (excludeBasicLands && card.isBasicLand) return false;
+    
+    // Apply hidden cards filter
+    if (!showHidden && hiddenCards.has(index)) return false;
+    
+    return true;
+  });
 
   // Sort cards based on selected criteria
   const sortedCards = React.useMemo(() => {
@@ -353,6 +386,31 @@ function DeckAnalysisResults({ analysis, excludeBasicLands, aggressiveArtMatchin
     }
   };
 
+  const toggleCardVisibility = (cardIndex: number) => {
+    setHiddenCards(prev => {
+      const newHidden = new Set(prev);
+      if (newHidden.has(cardIndex)) {
+        newHidden.delete(cardIndex);
+      } else {
+        newHidden.add(cardIndex);
+      }
+      return newHidden;
+    });
+  };
+
+  const hideAllMissingCards = () => {
+    const missingCardIndices = enhancedCards
+      .map((card, index) => ({ card, index }))
+      .filter(({ card }) => !card.isFullyAvailable)
+      .map(({ index }) => index);
+    
+    setHiddenCards(prev => new Set([...Array.from(prev), ...missingCardIndices]));
+  };
+
+  const showAllCards = () => {
+    setHiddenCards(new Set());
+  };
+
   if (loading) {
     return (
       <Card>
@@ -467,65 +525,115 @@ function DeckAnalysisResults({ analysis, excludeBasicLands, aggressiveArtMatchin
         </CardContent>
       </Card>
 
-      {/* Sorting Controls */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <ArrowUpDownIcon className="h-5 w-5" />
-            Sort Cards
-          </CardTitle>
-        </CardHeader>
-        <CardContent>
-          <div className="flex flex-wrap gap-2">
-            <Button
-              variant={sortBy === 'none' ? 'default' : 'outline'}
-              size="sm"
-              onClick={() => setSortBy('none')}
-            >
-              Default Order
-            </Button>
-            <Button
-              variant={sortBy === 'availability' ? 'default' : 'outline'}
-              size="sm"
-              onClick={() => handleSortChange('availability')}
-            >
-              Availability {sortBy === 'availability' && (sortDirection === 'asc' ? '↑' : '↓')}
-            </Button>
-            <Button
-              variant={sortBy === 'markup' ? 'default' : 'outline'}
-              size="sm"
-              onClick={() => handleSortChange('markup')}
-            >
-              Markup {sortBy === 'markup' && (sortDirection === 'asc' ? '↑' : '↓')}
-            </Button>
-            <Button
-              variant={sortBy === 'outpost-price' ? 'default' : 'outline'}
-              size="sm"
-              onClick={() => handleSortChange('outpost-price')}
-            >
-              Outpost Price {sortBy === 'outpost-price' && (sortDirection === 'asc' ? '↑' : '↓')}
-            </Button>
-            <Button
-              variant={sortBy === 'market-price' ? 'default' : 'outline'}
-              size="sm"
-              onClick={() => handleSortChange('market-price')}
-            >
-              Market Price {sortBy === 'market-price' && (sortDirection === 'asc' ? '↑' : '↓')}
-            </Button>
-            <Button
-              variant={sortBy === 'name' ? 'default' : 'outline'}
-              size="sm"
-              onClick={() => handleSortChange('name')}
-            >
-              Name {sortBy === 'name' && (sortDirection === 'asc' ? '↑' : '↓')}
-            </Button>
-          </div>
-          <p className="text-xs text-muted-foreground mt-2">
-            Click the same sort option again to reverse the order. 
-            Markup shows price difference vs market value (negative = savings, positive = premium).
-          </p>
-        </CardContent>
-      </Card>
+      {/* Controls Section */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {/* Sorting Controls */}
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <ArrowUpDownIcon className="h-5 w-5" />
+              Sort Cards
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="flex flex-wrap gap-2">
+              <Button
+                variant={sortBy === 'none' ? 'default' : 'outline'}
+                size="sm"
+                onClick={() => setSortBy('none')}
+              >
+                Default Order
+              </Button>
+              <Button
+                variant={sortBy === 'availability' ? 'default' : 'outline'}
+                size="sm"
+                onClick={() => handleSortChange('availability')}
+              >
+                Availability {sortBy === 'availability' && (sortDirection === 'asc' ? '↑' : '↓')}
+              </Button>
+              <Button
+                variant={sortBy === 'markup' ? 'default' : 'outline'}
+                size="sm"
+                onClick={() => handleSortChange('markup')}
+              >
+                Markup {sortBy === 'markup' && (sortDirection === 'asc' ? '↑' : '↓')}
+              </Button>
+              <Button
+                variant={sortBy === 'outpost-price' ? 'default' : 'outline'}
+                size="sm"
+                onClick={() => handleSortChange('outpost-price')}
+              >
+                Outpost Price {sortBy === 'outpost-price' && (sortDirection === 'asc' ? '↑' : '↓')}
+              </Button>
+              <Button
+                variant={sortBy === 'market-price' ? 'default' : 'outline'}
+                size="sm"
+                onClick={() => handleSortChange('market-price')}
+              >
+                Market Price {sortBy === 'market-price' && (sortDirection === 'asc' ? '↑' : '↓')}
+              </Button>
+              <Button
+                variant={sortBy === 'name' ? 'default' : 'outline'}
+                size="sm"
+                onClick={() => handleSortChange('name')}
+              >
+                Name {sortBy === 'name' && (sortDirection === 'asc' ? '↑' : '↓')}
+              </Button>
+            </div>
+            <p className="text-xs text-muted-foreground mt-2">
+              Click the same sort option again to reverse the order. 
+              Markup shows price difference vs market value (negative = savings, positive = premium).
+            </p>
+          </CardContent>
+        </Card>
+
+        {/* Card Management Controls */}
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <EyeOffIcon className="h-5 w-5" />
+              Manage Cards
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="flex items-center space-x-3">
+              <Checkbox
+                id="show-hidden"
+                checked={showHidden}
+                onCheckedChange={(checked) => setShowHidden(!!checked)}
+              />
+              <label htmlFor="show-hidden" className="text-sm font-medium">
+                Show hidden cards ({hiddenCards.size} hidden)
+              </label>
+            </div>
+            
+            <div className="flex flex-wrap gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={hideAllMissingCards}
+                className="flex items-center gap-1"
+              >
+                <MinusCircleIcon className="h-4 w-4" />
+                Hide Missing Cards
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={showAllCards}
+                className="flex items-center gap-1"
+              >
+                <PlusCircleIcon className="h-4 w-4" />
+                Show All Cards
+              </Button>
+            </div>
+            
+            <p className="text-xs text-muted-foreground">
+              Hide cards you already own or don't need. Hidden cards won't count towards totals and cost calculations.
+            </p>
+          </CardContent>
+        </Card>
+      </div>
 
       {/* Card Availability */}
       <Card>
@@ -533,19 +641,26 @@ function DeckAnalysisResults({ analysis, excludeBasicLands, aggressiveArtMatchin
           <CardTitle>Card Availability</CardTitle>
         </CardHeader>
         <CardContent className="space-y-3">
-          {filteredAnalysis.cardAvailability.map((card, index) => (
-            <Card
-              key={index}
-              className={`${
-                card.isFullyAvailable
-                  ? 'bg-green-50 border-green-200'
-                  : 'bg-red-50 border-red-200'
-              } ${
-                aggressiveArtMatching && !card.artMatched 
-                  ? 'ring-2 ring-orange-300 bg-orange-50 border-orange-200'
-                  : ''
-              }`}
-            >
+          {filteredAnalysis.cardAvailability.map((card, displayIndex) => {
+            // Find the original index in enhancedCards for hiding functionality
+            const originalIndex = enhancedCards.findIndex(c => c.cardName === card.cardName);
+            const isHidden = hiddenCards.has(originalIndex);
+            
+            return (
+              <Card
+                key={originalIndex}
+                className={`transition-all duration-200 ${
+                  isHidden && showHidden
+                    ? 'opacity-60 bg-gray-50 border-gray-300'
+                    : card.isFullyAvailable
+                    ? 'bg-green-50 border-green-200 hover:shadow-md'
+                    : 'bg-red-50 border-red-200 hover:shadow-md'
+                } ${
+                  aggressiveArtMatching && !card.artMatched 
+                    ? 'ring-2 ring-orange-300 bg-orange-50 border-orange-200'
+                    : ''
+                }`}
+              >
               <CardContent className="p-4">
                 <div className="flex items-start gap-4">
                   {/* Card Image */}
@@ -576,32 +691,37 @@ function DeckAnalysisResults({ analysis, excludeBasicLands, aggressiveArtMatchin
                           <XCircleIcon className="h-5 w-5 text-red-600 mt-0.5 flex-shrink-0" />
                         )}
                         <div className="flex-1 min-w-0">
-                          <div className="font-medium text-foreground">
+                          <div className="flex items-center gap-2 mb-1">
                             <button
                               onClick={() => handleCardClick(card)}
-                              className="hover:underline cursor-pointer text-left"
+                              className="font-medium text-foreground hover:text-blue-600 hover:underline cursor-pointer"
                             >
                               {card.cardName}
                             </button>
                             {aggressiveArtMatching && !card.artMatched && (
-                              <Badge variant="outline" className="ml-2 text-orange-600 border-orange-300">
+                              <Badge variant="outline" className="text-orange-600 border-orange-300">
                                 Art Mismatch
                               </Badge>
                             )}
+                            {isHidden && showHidden && (
+                              <Badge variant="secondary" className="text-gray-600">
+                                Hidden
+                              </Badge>
+                            )}
                           </div>
-                          <div className="text-sm text-muted-foreground">
+                          <div className="text-sm text-muted-foreground mb-2">
                             Need: {card.requestedQuantity} • Available: {card.totalAvailable}
                           </div>
                           
                           {/* Copy Selection */}
                           {card.allPrintings && card.allPrintings.length > 1 && (
-                            <div className="mt-2">
+                            <div className="mb-2">
                               <Select
                                 value={card.selectedPrinting?.id || ''}
                                 onValueChange={(printingId) => {
                                   const printing = card.allPrintings?.find(p => p.id === printingId);
                                   if (printing) {
-                                    handlePrintingSelect(index, printing);
+                                    handlePrintingSelect(originalIndex, printing);
                                   }
                                 }}
                               >
@@ -629,6 +749,26 @@ function DeckAnalysisResults({ analysis, excludeBasicLands, aggressiveArtMatchin
                               </Select>
                             </div>
                           )}
+                          
+                          {/* Hide/Show Button */}
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => toggleCardVisibility(originalIndex)}
+                            className={`text-xs h-6 ${isHidden ? 'text-blue-600 hover:text-blue-700' : 'text-gray-600 hover:text-gray-700'}`}
+                          >
+                            {isHidden ? (
+                              <>
+                                <EyeIcon className="h-3 w-3 mr-1" />
+                                Show
+                              </>
+                            ) : (
+                              <>
+                                <EyeOffIcon className="h-3 w-3 mr-1" />
+                                Hide
+                              </>
+                            )}
+                          </Button>
                         </div>
                       </div>
 
@@ -724,7 +864,8 @@ function DeckAnalysisResults({ analysis, excludeBasicLands, aggressiveArtMatchin
                 )}
               </CardContent>
             </Card>
-          ))}
+              );
+            })}
         </CardContent>
       </Card>
 
@@ -909,7 +1050,7 @@ Each line should have: quantity, card name, optional (SET) collector_number, opt
           </div>
           
           <div className="flex gap-3">
-            <Button
+            <Button 
               onClick={handleAnalyzeDeck}
               disabled={isAnalyzing || !deckListText.trim()}
               className="flex-1"
@@ -923,7 +1064,7 @@ Each line should have: quantity, card name, optional (SET) collector_number, opt
                 'Analyze Deck'
               )}
             </Button>
-            <Button
+            <Button 
               variant="outline"
               onClick={handleClearDeck}
               disabled={isAnalyzing}
@@ -1059,6 +1200,7 @@ Each line should have: quantity, card name, optional (SET) collector_number, opt
           </p>
         </CardContent>
       </Card>
+
 
     </div>
   );

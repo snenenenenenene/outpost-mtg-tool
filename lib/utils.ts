@@ -18,6 +18,12 @@ export function formatPrice(price: number): string {
 
 // Format date for display
 export function formatDate(dateString: string): string {
+  // Return a simple fallback for server-side rendering
+  if (typeof window === 'undefined') {
+    return new Date(dateString).toISOString().split('T')[0]; // Simple YYYY-MM-DD format
+  }
+  
+  // Full formatting for client-side
   return new Date(dateString).toLocaleString('en-US', {
     year: 'numeric',
     month: 'short',

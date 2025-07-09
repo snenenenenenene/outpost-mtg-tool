@@ -20,10 +20,16 @@ export default function Home() {
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [activeTab, setActiveTab] = useState<'deck' | 'search' | 'collections'>('search');
   const [error, setError] = useState<string | null>(null);
+  const [isHydrated, setIsHydrated] = useState(false);
 
   const { analyzeDeck, deckAnalysis, currentDeck, outpostData, isLoading, lastDataRefresh, refreshData, loadOutpostData, isBasketOpen, toggleBasket, getBasketSummary, removeToast } = useStore();
   
   const basketSummary = getBasketSummary();
+
+  // Track hydration to prevent server/client mismatch
+  useEffect(() => {
+    setIsHydrated(true);
+  }, []);
 
   // Load data on page mount
   useEffect(() => {
@@ -84,7 +90,7 @@ export default function Home() {
                 />
               </div>
               <div className="flex items-center space-x-2 sm:space-x-4">
-                {lastDataRefresh && (
+                {isHydrated && lastDataRefresh && (
                   <span className="hidden sm:block text-sm text-muted-foreground bg-white/50 dark:bg-gray-800/50 px-3 py-1 rounded-full backdrop-blur-sm">
                     Last updated: {formatDate(lastDataRefresh)}
                   </span>
@@ -133,9 +139,11 @@ export default function Home() {
                 className="data-[state=active]:bg-white dark:data-[state=active]:bg-gray-800 data-[state=active]:shadow-md transition-all duration-300"
               >
                 Card Search
-                <Badge variant="secondary" className="ml-2 bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 shadow-sm">
-                  {outpostData.length.toLocaleString()}
-                </Badge>
+                {isHydrated && (
+                  <Badge variant="secondary" className="ml-2 bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 shadow-sm">
+                    {outpostData.length.toLocaleString()}
+                  </Badge>
+                )}
               </TabsTrigger>
               <TabsTrigger 
                 value="collections"

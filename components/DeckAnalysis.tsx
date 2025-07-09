@@ -13,7 +13,7 @@ import { Progress } from '@/components/ui/progress';
 import { Separator } from '@/components/ui/separator';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { CheckCircleIcon, XCircleIcon, AlertCircleIcon, FileTextIcon, SparklesIcon, ImageIcon, ExternalLinkIcon, TrendingUpIcon, MapIcon } from 'lucide-react';
+import { CheckCircleIcon, XCircleIcon, AlertCircleIcon, FileTextIcon, SparklesIcon, ImageIcon, ExternalLinkIcon, TrendingUpIcon, MapIcon, ArrowUpDownIcon } from 'lucide-react';
 import { 
   ScryfallCard, 
   getCardForThumbnail, 
@@ -47,23 +47,78 @@ interface EnhancedCardAvailability extends CardAvailability {
   marketPrice?: number;
   marketPriceFoil?: number;
   isBasicLand?: boolean;
+  artMatched?: boolean; // New field to track if art matches original deck
 }
+
+// Sorting options
+type SortOption = 'none' | 'availability' | 'markup' | 'outpost-price' | 'market-price' | 'name';
 
 interface DeckAnalysisResultsProps {
   analysis: DeckAnalysisType;
   excludeBasicLands: boolean;
+  aggressiveArtMatching: boolean;
+  originalDeckCards: DeckCard[];
 }
 
-function DeckAnalysisResults({ analysis, excludeBasicLands }: DeckAnalysisResultsProps) {
+function DeckAnalysisResults({ analysis, excludeBasicLands, aggressiveArtMatching, originalDeckCards }: DeckAnalysisResultsProps) {
   const [enhancedCards, setEnhancedCards] = useState<EnhancedCardAvailability[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedCard, setSelectedCard] = useState<any>(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [hoveredCard, setHoveredCard] = useState<ScryfallCard | null>(null);
   const [hoveredPosition, setHoveredPosition] = useState({ x: 0, y: 0 });
+  const [sortBy, setSortBy] = useState<SortOption>('none');
+  const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('desc');
 
   // Basic land types for filtering
   const BASIC_LAND_NAMES = ['Plains', 'Island', 'Swamp', 'Mountain', 'Forest', 'Wastes'];
+
+  // Helper function to check if art matches between cards
+  const checkArtMatch = (scryfallCard: ScryfallCard, originalCard: DeckCard): boolean => {
+    if (!originalCard.set || !originalCard.collectorNumber) return true; // Can't check, assume match
+    
+    return scryfallCard.set.toLowerCase() === originalCard.set.toLowerCase() && 
+           scryfallCard.collector_number === originalCard.collectorNumber;
+  };
+
+  // Helper function to find best art-matching printing
+  const findBestArtMatch = (allPrintings: ScryfallCard[], originalCard: DeckCard): ScryfallCard | null => {
+    console.log(`🎨 Finding best art match for ${originalCard.name}:`, {
+      originalSet: originalCard.set,
+      originalCollectorNumber: originalCard.collectorNumber,
+      availablePrintings: allPrintings.map(p => ({ set: p.set, collector_number: p.collector_number, set_name: p.set_name }))
+    });
+
+    if (!originalCard.set && !originalCard.collectorNumber) {
+      console.log(`⚪ No set/collector info for ${originalCard.name}, using newest printing`);
+      return allPrintings[0]; // Return newest printing if no specific art preference
+    }
+
+    // First try exact match on set and collector number
+    const exactMatch = allPrintings.find(printing => 
+      originalCard.set && printing.set.toLowerCase() === originalCard.set.toLowerCase() &&
+      originalCard.collectorNumber && printing.collector_number === originalCard.collectorNumber
+    );
+    if (exactMatch) {
+      console.log(`✅ Exact match found for ${originalCard.name}:`, { set: exactMatch.set, collector_number: exactMatch.collector_number });
+      return exactMatch;
+    }
+
+    // Try set match only
+    if (originalCard.set) {
+      const setMatch = allPrintings.find(printing => 
+        printing.set.toLowerCase() === originalCard.set!.toLowerCase()
+      );
+      if (setMatch) {
+        console.log(`🔍 Set match found for ${originalCard.name}:`, { set: setMatch.set, collector_number: setMatch.collector_number });
+        return setMatch;
+      }
+    }
+
+    // Return newest printing as fallback
+    console.log(`⚠️ No specific match for ${originalCard.name}, using fallback:`, { set: allPrintings[0].set, collector_number: allPrintings[0].collector_number });
+    return allPrintings[0];
+  };
 
   // Load Scryfall data for all cards
   useEffect(() => {
@@ -74,17 +129,49 @@ function DeckAnalysisResults({ analysis, excludeBasicLands }: DeckAnalysisResult
         analysis.cardAvailability.map(async (card): Promise<EnhancedCardAvailability> => {
           const isBasicLand = BASIC_LAND_NAMES.includes(card.cardName);
           
+          // Find original deck card for art matching
+          const originalCard = originalDeckCards.find(dc => 
+            dc.name.toLowerCase() === card.cardName.toLowerCase()
+          );
+          
           if (!shouldFetchScryfallData(card.cardName) || isBasicLand) {
-            return { ...card, isBasicLand };
+            return { ...card, isBasicLand, artMatched: true };
           }
 
           try {
-            // Get main Scryfall card data
-            const scryfallCard = await getCardForThumbnail(card.cardName);
+            // Get main Scryfall card data and all printings
+            let scryfallCard = await getCardForThumbnail(card.cardName);
             let allPrintings: ScryfallCard[] = [];
+            let artMatched = true;
             
             if (scryfallCard) {
               allPrintings = await getAllPrintings(card.cardName);
+              
+              // Try to find better art match if we have original card info
+              if (originalCard && allPrintings.length > 1) {
+                const bestMatch = findBestArtMatch(allPrintings, originalCard);
+                if (bestMatch && bestMatch.id !== scryfallCard.id) {
+                  scryfallCard = bestMatch;
+                }
+                artMatched = checkArtMatch(scryfallCard, originalCard);
+              }
+            }
+
+            // For aggressive art matching, filter out available cards that don't match art
+            let filteredAvailableCards = card.availableCards;
+            if (aggressiveArtMatching && originalCard && scryfallCard) {
+              filteredAvailableCards = card.availableCards.filter(availableCard => {
+                if (!originalCard.set) return true; // Can't filter without set info
+                
+                // Check if the available card matches the original set
+                const availableSet = availableCard.set || availableCard.collection;
+                return !availableSet || !originalCard.set || availableSet.toLowerCase() === originalCard.set.toLowerCase();
+              });
+              
+              // If no cards match art, mark as not fully available
+              if (filteredAvailableCards.length === 0) {
+                artMatched = false;
+              }
             }
 
             // Determine market prices (prefer EUR, fallback to USD)
@@ -101,18 +188,35 @@ function DeckAnalysisResults({ analysis, excludeBasicLands }: DeckAnalysisResult
               marketPriceFoil = eurFoilPrice || (usdFoilPrice * 0.85);
             }
 
+            // Update card availability if aggressive art matching filtered out cards
+            const updatedCard = aggressiveArtMatching && filteredAvailableCards.length !== card.availableCards.length
+              ? {
+                  ...card,
+                  availableCards: filteredAvailableCards,
+                  totalAvailable: filteredAvailableCards.reduce((sum, ac) => 
+                    sum + (ac.conditions?.reduce((condSum, cond) => condSum + cond.stock, 0) || 0), 0),
+                  isFullyAvailable: filteredAvailableCards.reduce((sum, ac) => 
+                    sum + (ac.conditions?.reduce((condSum, cond) => condSum + cond.stock, 0) || 0), 0) >= card.requestedQuantity,
+                  cheapestPrice: filteredAvailableCards.length > 0 
+                    ? Math.min(...filteredAvailableCards.flatMap(ac => 
+                        ac.conditions?.filter(c => c.price > 0).map(c => c.price / 100) || [])) 
+                    : 0
+                }
+              : card;
+
             return {
-              ...card,
+              ...updatedCard,
               scryfallCard: scryfallCard || undefined,
               allPrintings,
               selectedPrinting: scryfallCard || undefined,
               marketPrice,
               marketPriceFoil,
-              isBasicLand
+              isBasicLand,
+              artMatched
             };
           } catch (error) {
             console.warn(`Failed to load Scryfall data for ${card.cardName}:`, error);
-            return { ...card, isBasicLand };
+            return { ...card, isBasicLand, artMatched: true };
           }
         })
       );
@@ -122,25 +226,73 @@ function DeckAnalysisResults({ analysis, excludeBasicLands }: DeckAnalysisResult
     };
 
     loadScryfallData();
-  }, [analysis.cardAvailability]);
+  }, [analysis.cardAvailability, aggressiveArtMatching, originalDeckCards]);
 
   // Filter cards based on exclude basic lands setting
   const filteredCards = excludeBasicLands 
     ? enhancedCards.filter(card => !card.isBasicLand)
     : enhancedCards;
 
+  // Sort cards based on selected criteria
+  const sortedCards = React.useMemo(() => {
+    if (sortBy === 'none') return filteredCards;
+
+    const sorted = [...filteredCards].sort((a, b) => {
+      let comparison = 0;
+
+      switch (sortBy) {
+        case 'availability':
+          // Sort by availability status, then by available quantity
+          if (a.isFullyAvailable !== b.isFullyAvailable) {
+            comparison = a.isFullyAvailable ? -1 : 1;
+          } else {
+            comparison = a.totalAvailable - b.totalAvailable;
+          }
+          break;
+
+        case 'markup':
+          // Sort by price difference (markup/savings)
+          const aMarkup = a.marketPrice ? (a.cheapestPrice - a.marketPrice) : 0;
+          const bMarkup = b.marketPrice ? (b.cheapestPrice - b.marketPrice) : 0;
+          comparison = aMarkup - bMarkup;
+          break;
+
+        case 'outpost-price':
+          comparison = a.cheapestPrice - b.cheapestPrice;
+          break;
+
+        case 'market-price':
+          const aMarket = a.marketPrice || 0;
+          const bMarket = b.marketPrice || 0;
+          comparison = aMarket - bMarket;
+          break;
+
+        case 'name':
+          comparison = a.cardName.localeCompare(b.cardName);
+          break;
+
+        default:
+          comparison = 0;
+      }
+
+      return sortDirection === 'asc' ? comparison : -comparison;
+    });
+
+    return sorted;
+  }, [filteredCards, sortBy, sortDirection]);
+
   // Calculate totals
   const filteredAnalysis = {
     ...analysis,
-    cardAvailability: filteredCards,
-    totalCards: filteredCards.reduce((sum, card) => sum + card.requestedQuantity, 0),
-    availableCards: filteredCards.filter(card => card.isFullyAvailable).length,
-    missingCards: filteredCards.filter(card => !card.isFullyAvailable).length,
-    totalCost: filteredCards.reduce((sum, card) => sum + card.cheapestPrice * card.requestedQuantity, 0)
+    cardAvailability: sortedCards,
+    totalCards: sortedCards.reduce((sum, card) => sum + card.requestedQuantity, 0),
+    availableCards: sortedCards.filter(card => card.isFullyAvailable).length,
+    missingCards: sortedCards.filter(card => !card.isFullyAvailable).length,
+    totalCost: sortedCards.reduce((sum, card) => sum + card.cheapestPrice * card.requestedQuantity, 0)
   };
 
   // Calculate market value totals
-  const marketValueTotal = filteredCards.reduce((sum, card) => {
+  const marketValueTotal = sortedCards.reduce((sum, card) => {
     if (!card.marketPrice) return sum;
     const basePrice = card.marketPrice;
     const foilPrice = card.marketPriceFoil || card.marketPrice;
@@ -187,6 +339,17 @@ function DeckAnalysisResults({ analysis, excludeBasicLands }: DeckAnalysisResult
     setHoveredCard(printing);
     if (event && printing) {
       setHoveredPosition({ x: event.clientX, y: event.clientY });
+    }
+  };
+
+  const handleSortChange = (newSortBy: SortOption) => {
+    if (newSortBy === sortBy) {
+      // Toggle direction if same sort option
+      setSortDirection(prev => prev === 'asc' ? 'desc' : 'asc');
+    } else {
+      setSortBy(newSortBy);
+      // Default direction based on sort type
+      setSortDirection(newSortBy === 'name' ? 'asc' : 'desc');
     }
   };
 
@@ -304,6 +467,66 @@ function DeckAnalysisResults({ analysis, excludeBasicLands }: DeckAnalysisResult
         </CardContent>
       </Card>
 
+      {/* Sorting Controls */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <ArrowUpDownIcon className="h-5 w-5" />
+            Sort Cards
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="flex flex-wrap gap-2">
+            <Button
+              variant={sortBy === 'none' ? 'default' : 'outline'}
+              size="sm"
+              onClick={() => setSortBy('none')}
+            >
+              Default Order
+            </Button>
+            <Button
+              variant={sortBy === 'availability' ? 'default' : 'outline'}
+              size="sm"
+              onClick={() => handleSortChange('availability')}
+            >
+              Availability {sortBy === 'availability' && (sortDirection === 'asc' ? '↑' : '↓')}
+            </Button>
+            <Button
+              variant={sortBy === 'markup' ? 'default' : 'outline'}
+              size="sm"
+              onClick={() => handleSortChange('markup')}
+            >
+              Markup {sortBy === 'markup' && (sortDirection === 'asc' ? '↑' : '↓')}
+            </Button>
+            <Button
+              variant={sortBy === 'outpost-price' ? 'default' : 'outline'}
+              size="sm"
+              onClick={() => handleSortChange('outpost-price')}
+            >
+              Outpost Price {sortBy === 'outpost-price' && (sortDirection === 'asc' ? '↑' : '↓')}
+            </Button>
+            <Button
+              variant={sortBy === 'market-price' ? 'default' : 'outline'}
+              size="sm"
+              onClick={() => handleSortChange('market-price')}
+            >
+              Market Price {sortBy === 'market-price' && (sortDirection === 'asc' ? '↑' : '↓')}
+            </Button>
+            <Button
+              variant={sortBy === 'name' ? 'default' : 'outline'}
+              size="sm"
+              onClick={() => handleSortChange('name')}
+            >
+              Name {sortBy === 'name' && (sortDirection === 'asc' ? '↑' : '↓')}
+            </Button>
+          </div>
+          <p className="text-xs text-muted-foreground mt-2">
+            Click the same sort option again to reverse the order. 
+            Markup shows price difference vs market value (negative = savings, positive = premium).
+          </p>
+        </CardContent>
+      </Card>
+
       {/* Card Availability */}
       <Card>
         <CardHeader>
@@ -317,6 +540,10 @@ function DeckAnalysisResults({ analysis, excludeBasicLands }: DeckAnalysisResult
                 card.isFullyAvailable
                   ? 'bg-green-50 border-green-200'
                   : 'bg-red-50 border-red-200'
+              } ${
+                aggressiveArtMatching && !card.artMatched 
+                  ? 'ring-2 ring-orange-300 bg-orange-50 border-orange-200'
+                  : ''
               }`}
             >
               <CardContent className="p-4">
@@ -356,6 +583,11 @@ function DeckAnalysisResults({ analysis, excludeBasicLands }: DeckAnalysisResult
                             >
                               {card.cardName}
                             </button>
+                            {aggressiveArtMatching && !card.artMatched && (
+                              <Badge variant="outline" className="ml-2 text-orange-600 border-orange-300">
+                                Art Mismatch
+                              </Badge>
+                            )}
                           </div>
                           <div className="text-sm text-muted-foreground">
                             Need: {card.requestedQuantity} • Available: {card.totalAvailable}
@@ -423,6 +655,19 @@ function DeckAnalysisResults({ analysis, excludeBasicLands }: DeckAnalysisResult
                             {card.marketPriceFoil && card.marketPriceFoil !== card.marketPrice && (
                               <div className="text-xs text-blue-500">
                                 Foil: {formatPrice(card.marketPriceFoil)}
+                              </div>
+                            )}
+                            {/* Markup indicator */}
+                            {card.cheapestPrice > 0 && (
+                              <div className={`text-xs font-medium ${
+                                card.cheapestPrice < card.marketPrice 
+                                  ? 'text-green-600' 
+                                  : 'text-orange-600'
+                              }`}>
+                                {card.cheapestPrice < card.marketPrice 
+                                  ? `Save ${formatPrice(card.marketPrice - card.cheapestPrice)}`
+                                  : `+${formatPrice(card.cheapestPrice - card.marketPrice)}`
+                                }
                               </div>
                             )}
                           </div>
@@ -524,27 +769,41 @@ function parseDeckList(deckListText: string, deckName: string = 'Imported Deck')
     // Skip comment lines
     if (trimmedLine.startsWith('//') || trimmedLine.startsWith('#')) continue;
     
-    // Parse format: "1 Cayth, Famed Mechanist (M3C) 6 *F*"
+    // Parse format: "1 Alania (OTJ) 204 *F*"
+    // or "1 Cayth, Famed Mechanist (M3C) 6"
     // or simpler: "1 Lightning Bolt"
-    const match = trimmedLine.match(/^(\d+)\s+(.+?)(?:\s+\(([^)]+)\))?(?:\s+(\d+))?(?:\s+\*F\*)?$/);
+    const match = trimmedLine.match(/^(\d+)\s+(.+?)(?:\s+\(([^)]+)\)(?:\s+(\d+))?)?(?:\s+\*F\*)?$/);
     
     if (match) {
       const quantity = parseInt(match[1]);
       let cardName = match[2].trim();
-      const setCode = match[3];
-      const collectorNumber = match[4];
+      const setInfo = match[3]; // Could be just set code or "SET COLLECTORNUM"
+      let setCode: string | undefined;
+      let collectorNumber: string | undefined;
       const foil = trimmedLine.includes('*F*');
+      
+      // Parse set info - could be "OTJ 204" or just "M3C"
+      if (setInfo) {
+        const setParts = setInfo.trim().split(/\s+/);
+        setCode = setParts[0];
+        if (setParts.length > 1) {
+          collectorNumber = setParts[1];
+        }
+      }
       
       // Clean up card name (remove any trailing set info that wasn't caught)
       cardName = cardName.replace(/\s+\([^)]+\)\s*\d*\s*\*?F?\*?$/, '').trim();
       
-      cards.push({
+      const parsedCard = {
         name: cardName,
         quantity,
         set: setCode,
         collectorNumber,
         foil
-      });
+      };
+      
+      console.log(`📝 Parsed deck card:`, parsedCard);
+      cards.push(parsedCard);
     }
   }
   
@@ -564,6 +823,7 @@ export default function DeckAnalysis() {
   const [error, setError] = useState<string | null>(null);
   const [matchCardStyle, setMatchCardStyle] = useState(false);
   const [excludeBasicLands, setExcludeBasicLands] = useState(false);
+  const [aggressiveArtMatching, setAggressiveArtMatching] = useState(false);
 
   const handleAnalyzeDeck = async () => {
     if (!deckListText.trim()) {
@@ -599,9 +859,12 @@ export default function DeckAnalysis() {
           name: card.name,
           quantity: card.quantity,
           set: card.set,
-          foil: card.foil || false
+          foil: false // MoxfieldCard doesn't have foil info, default to false
         };
       });
+
+      // Store the parsed deck cards for art matching
+      (mockMoxfieldDeck as any).originalParsedCards = parsedDeck.cards;
 
       analyzeDeck(mockMoxfieldDeck, matchCardStyle);
     } catch (err) {
@@ -644,12 +907,12 @@ export default function DeckAnalysis() {
               value={deckListText}
               onChange={(e) => setDeckListText(e.target.value)}
               placeholder={`Paste your deck list here. Supported formats:
-1 Cayth, Famed Mechanist (M3C) 6 *F*
-1 Lightning Bolt
+1 Alania (OTJ) 204 *F*
+1 Lightning Bolt (M21) 168
 2 Island
 1 Sol Ring *F*
 
-Each line should have: quantity, card name, optional set info, optional *F* for foil`}
+Each line should have: quantity, card name, optional (SET) collector_number, optional *F* for foil`}
               rows={12}
               className="font-mono text-sm"
             />
@@ -711,7 +974,7 @@ Each line should have: quantity, card name, optional set info, optional *F* for 
       )}
 
       {/* Analysis Results */}
-      {deckAnalysis && <DeckAnalysisResults analysis={deckAnalysis} excludeBasicLands={excludeBasicLands} />}
+      {deckAnalysis && <DeckAnalysisResults analysis={deckAnalysis} excludeBasicLands={excludeBasicLands} aggressiveArtMatching={aggressiveArtMatching} originalDeckCards={(currentDeck as any)?.originalParsedCards || []} />}
 
       {/* Empty State */}
       {!currentDeck && !deckAnalysis && (
@@ -726,7 +989,7 @@ Each line should have: quantity, card name, optional set info, optional *F* for 
               <div className="font-medium mb-2">Supported formats:</div>
               <div className="text-left inline-block space-y-1">
                 <div><code className="text-xs">1 Lightning Bolt</code></div>
-                <div><code className="text-xs">1 Cayth, Famed Mechanist (M3C) 6 *F*</code></div>
+                <div><code className="text-xs">1 Alania (OTJ) 204 *F*</code></div>
                 <div><code className="text-xs">4 Island</code></div>
               </div>
             </div>
@@ -779,6 +1042,30 @@ Each line should have: quantity, card name, optional set info, optional *F* for 
           <p className="text-xs text-gray-500 mt-2">
             Basic lands (Plains, Island, Swamp, Mountain, Forest, Wastes) are often available in large quantities and have low market value.
             Excluding them can give a more accurate representation of the market for other cards.
+          </p>
+        </CardContent>
+      </Card>
+
+      {/* Aggressive Art Matching Toggle */}
+      <Card>
+        <CardHeader>
+          <CardTitle>Aggressive Art Matching</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="flex items-center space-x-3">
+            <Checkbox
+              id="aggressive-art-matching"
+              checked={aggressiveArtMatching}
+              onCheckedChange={(checked) => setAggressiveArtMatching(!!checked)}
+              className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
+            />
+            <label htmlFor="aggressive-art-matching" className="text-sm font-medium text-gray-700">
+              Aggressively match card art to original deck (e.g., set and collector number)
+            </label>
+          </div>
+          <p className="text-xs text-gray-500 mt-2">
+            When checked, will prioritize finding Scryfall cards that match the exact set and collector number of cards in your deck.
+            This can help ensure you get the correct art for your deck.
           </p>
         </CardContent>
       </Card>

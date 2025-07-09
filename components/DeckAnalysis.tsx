@@ -1,8 +1,9 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { DeckAnalysis as DeckAnalysisType, CardAvailability } from '@/lib/types';
 import { formatPrice } from '@/lib/utils';
 import useStore from '@/lib/store';
 import LoadingSpinner from './LoadingSpinner';
+import CardDetailModal from './CardDetailModal';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
@@ -10,7 +11,17 @@ import { Textarea } from '@/components/ui/textarea';
 import { Button } from '@/components/ui/button';
 import { Progress } from '@/components/ui/progress';
 import { Separator } from '@/components/ui/separator';
-import { CheckCircleIcon, XCircleIcon, AlertCircleIcon, FileTextIcon, SparklesIcon } from 'lucide-react';
+import { Checkbox } from '@/components/ui/checkbox';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { CheckCircleIcon, XCircleIcon, AlertCircleIcon, FileTextIcon, SparklesIcon, ImageIcon, ExternalLinkIcon, TrendingUpIcon, MapIcon } from 'lucide-react';
+import { 
+  ScryfallCard, 
+  getCardForThumbnail, 
+  getCardThumbnail, 
+  getAllPrintings,
+  getCardByNameAndSet,
+  shouldFetchScryfallData
+} from '@/lib/scryfall';
 
 // Types for parsed deck list
 interface DeckCard {
@@ -28,23 +39,167 @@ interface ParsedDeck {
   totalCards: number;
 }
 
-interface DeckAnalysisResultsProps {
-  analysis: DeckAnalysisType;
+// Enhanced card availability with Scryfall data
+interface EnhancedCardAvailability extends CardAvailability {
+  scryfallCard?: ScryfallCard;
+  allPrintings?: ScryfallCard[];
+  selectedPrinting?: ScryfallCard;
+  marketPrice?: number;
+  marketPriceFoil?: number;
+  isBasicLand?: boolean;
 }
 
-function DeckAnalysisResults({ analysis }: DeckAnalysisResultsProps) {
-  const totalCost = analysis.totalCost;
-  const availabilityPercentage = Math.round((analysis.availableCards / analysis.totalCards) * 100);
+interface DeckAnalysisResultsProps {
+  analysis: DeckAnalysisType;
+  excludeBasicLands: boolean;
+}
+
+function DeckAnalysisResults({ analysis, excludeBasicLands }: DeckAnalysisResultsProps) {
+  const [enhancedCards, setEnhancedCards] = useState<EnhancedCardAvailability[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [selectedCard, setSelectedCard] = useState<any>(null);
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [hoveredCard, setHoveredCard] = useState<ScryfallCard | null>(null);
+  const [hoveredPosition, setHoveredPosition] = useState({ x: 0, y: 0 });
+
+  // Basic land types for filtering
+  const BASIC_LAND_NAMES = ['Plains', 'Island', 'Swamp', 'Mountain', 'Forest', 'Wastes'];
+
+  // Load Scryfall data for all cards
+  useEffect(() => {
+    const loadScryfallData = async () => {
+      setLoading(true);
+      
+      const enhanced = await Promise.all(
+        analysis.cardAvailability.map(async (card): Promise<EnhancedCardAvailability> => {
+          const isBasicLand = BASIC_LAND_NAMES.includes(card.cardName);
+          
+          if (!shouldFetchScryfallData(card.cardName) || isBasicLand) {
+            return { ...card, isBasicLand };
+          }
+
+          try {
+            // Get main Scryfall card data
+            const scryfallCard = await getCardForThumbnail(card.cardName);
+            let allPrintings: ScryfallCard[] = [];
+            
+            if (scryfallCard) {
+              allPrintings = await getAllPrintings(card.cardName);
+            }
+
+            // Determine market prices (prefer EUR, fallback to USD)
+            let marketPrice = 0;
+            let marketPriceFoil = 0;
+            
+            if (scryfallCard) {
+              const eurPrice = parseFloat(scryfallCard.prices.eur || '0');
+              const usdPrice = parseFloat(scryfallCard.prices.usd || '0');
+              const eurFoilPrice = parseFloat(scryfallCard.prices.eur_foil || '0');
+              const usdFoilPrice = parseFloat(scryfallCard.prices.usd_foil || '0');
+              
+              marketPrice = eurPrice || (usdPrice * 0.85); // rough EUR conversion
+              marketPriceFoil = eurFoilPrice || (usdFoilPrice * 0.85);
+            }
+
+            return {
+              ...card,
+              scryfallCard: scryfallCard || undefined,
+              allPrintings,
+              selectedPrinting: scryfallCard || undefined,
+              marketPrice,
+              marketPriceFoil,
+              isBasicLand
+            };
+          } catch (error) {
+            console.warn(`Failed to load Scryfall data for ${card.cardName}:`, error);
+            return { ...card, isBasicLand };
+          }
+        })
+      );
+
+      setEnhancedCards(enhanced);
+      setLoading(false);
+    };
+
+    loadScryfallData();
+  }, [analysis.cardAvailability]);
+
+  // Filter cards based on exclude basic lands setting
+  const filteredCards = excludeBasicLands 
+    ? enhancedCards.filter(card => !card.isBasicLand)
+    : enhancedCards;
+
+  // Calculate totals
+  const filteredAnalysis = {
+    ...analysis,
+    cardAvailability: filteredCards,
+    totalCards: filteredCards.reduce((sum, card) => sum + card.requestedQuantity, 0),
+    availableCards: filteredCards.filter(card => card.isFullyAvailable).length,
+    missingCards: filteredCards.filter(card => !card.isFullyAvailable).length,
+    totalCost: filteredCards.reduce((sum, card) => sum + card.cheapestPrice * card.requestedQuantity, 0)
+  };
+
+  // Calculate market value totals
+  const marketValueTotal = filteredCards.reduce((sum, card) => {
+    if (!card.marketPrice) return sum;
+    const basePrice = card.marketPrice;
+    const foilPrice = card.marketPriceFoil || card.marketPrice;
+    
+    // Use foil price if most available cards are foil, otherwise use non-foil
+    const avgFoilRatio = card.availableCards.length > 0 
+      ? card.availableCards.filter(c => c.foil).length / card.availableCards.length 
+      : 0;
+    
+    const estimatedMarketPrice = avgFoilRatio > 0.5 ? foilPrice : basePrice;
+    return sum + (estimatedMarketPrice * card.requestedQuantity);
+  }, 0);
+
+  const availabilityPercentage = filteredAnalysis.totalCards > 0 
+    ? Math.round((filteredAnalysis.availableCards / filteredAnalysis.totalCards) * 100) 
+    : 0;
 
   const getRarityDisplay = (rarity: string) => {
     switch (rarity) {
       case 'C': return 'Common';
-      case 'U': return 'Uncommon';
+      case 'U': return 'Uncommon';  
       case 'R': return 'Rare';
       case 'M': return 'Mythic';
       default: return rarity;
     }
   };
+
+  const handleCardClick = (card: EnhancedCardAvailability) => {
+    if (card.availableCards.length > 0) {
+      setSelectedCard(card.availableCards[0]);
+      setIsModalOpen(true);
+    }
+  };
+
+  const handlePrintingSelect = (cardIndex: number, printing: ScryfallCard) => {
+    setEnhancedCards(prev => prev.map((card, index) => 
+      index === cardIndex 
+        ? { ...card, selectedPrinting: printing }
+        : card
+    ));
+  };
+
+  const handlePrintingHover = (printing: ScryfallCard | null, event?: React.MouseEvent) => {
+    setHoveredCard(printing);
+    if (event && printing) {
+      setHoveredPosition({ x: event.clientX, y: event.clientY });
+    }
+  };
+
+  if (loading) {
+    return (
+      <Card>
+        <CardContent className="p-8 text-center">
+          <LoadingSpinner />
+          <p className="mt-4 text-muted-foreground">Loading card images and market data...</p>
+        </CardContent>
+      </Card>
+    );
+  }
 
   return (
     <div className="space-y-6">
@@ -56,7 +211,7 @@ function DeckAnalysisResults({ analysis }: DeckAnalysisResultsProps) {
               <FileTextIcon className="h-8 w-8 text-blue-600" />
               <div className="ml-4">
                 <p className="text-sm font-medium text-muted-foreground">Total Cards</p>
-                <p className="text-2xl font-bold">{analysis.totalCards}</p>
+                <p className="text-2xl font-bold">{filteredAnalysis.totalCards}</p>
               </div>
             </div>
           </CardContent>
@@ -68,7 +223,7 @@ function DeckAnalysisResults({ analysis }: DeckAnalysisResultsProps) {
               <CheckCircleIcon className="h-8 w-8 text-green-600" />
               <div className="ml-4">
                 <p className="text-sm font-medium text-muted-foreground">Available</p>
-                <p className="text-2xl font-bold text-green-600">{analysis.availableCards}</p>
+                <p className="text-2xl font-bold text-green-600">{filteredAnalysis.availableCards}</p>
               </div>
             </div>
           </CardContent>
@@ -80,7 +235,7 @@ function DeckAnalysisResults({ analysis }: DeckAnalysisResultsProps) {
               <XCircleIcon className="h-8 w-8 text-red-600" />
               <div className="ml-4">
                 <p className="text-sm font-medium text-muted-foreground">Missing</p>
-                <p className="text-2xl font-bold text-red-600">{analysis.missingCards}</p>
+                <p className="text-2xl font-bold text-red-600">{filteredAnalysis.missingCards}</p>
               </div>
             </div>
           </CardContent>
@@ -99,20 +254,53 @@ function DeckAnalysisResults({ analysis }: DeckAnalysisResultsProps) {
         </Card>
       </div>
 
-      {/* Cost Summary */}
+      {/* Enhanced Cost Summary with Market Comparison */}
       <Card>
         <CardHeader>
-          <CardTitle>Cost Summary</CardTitle>
+          <CardTitle className="flex items-center gap-2">
+            <TrendingUpIcon className="h-5 w-5" />
+            Cost Summary & Market Comparison
+          </CardTitle>
         </CardHeader>
         <CardContent>
-          <div className="text-center">
-            <div className="text-3xl font-bold text-green-600 mb-2">
-              {formatPrice(totalCost)}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            {/* Outpost Total */}
+            <div className="text-center p-4 bg-green-50 rounded-lg border border-green-200">
+              <div className="text-sm font-medium text-green-700 mb-1">Outpost Gaming Belgium</div>
+              <div className="text-3xl font-bold text-green-600 mb-2">
+                {formatPrice(filteredAnalysis.totalCost)}
+              </div>
+              <p className="text-sm text-green-600">
+                Total cost for available cards
+              </p>
             </div>
-            <p className="text-muted-foreground">
-              Estimated total cost for available cards at Outpost Gaming Belgium
-            </p>
+            
+            {/* Market Value Total */}
+            <div className="text-center p-4 bg-blue-50 rounded-lg border border-blue-200">
+              <div className="text-sm font-medium text-blue-700 mb-1">Market Value (Scryfall)</div>
+              <div className="text-3xl font-bold text-blue-600 mb-2">
+                {formatPrice(marketValueTotal)}
+              </div>
+              <p className="text-sm text-blue-600">
+                Estimated market value
+              </p>
+            </div>
           </div>
+          
+          {/* Savings/Premium Indicator */}
+          {marketValueTotal > 0 && (
+            <div className="mt-4 text-center">
+              {filteredAnalysis.totalCost < marketValueTotal ? (
+                <div className="text-green-600 font-medium">
+                  💰 Save {formatPrice(marketValueTotal - filteredAnalysis.totalCost)} vs market price
+                </div>
+              ) : (
+                <div className="text-orange-600 font-medium">
+                  📈 {formatPrice(filteredAnalysis.totalCost - marketValueTotal)} premium vs market price
+                </div>
+              )}
+            </div>
+          )}
         </CardContent>
       </Card>
 
@@ -122,7 +310,7 @@ function DeckAnalysisResults({ analysis }: DeckAnalysisResultsProps) {
           <CardTitle>Card Availability</CardTitle>
         </CardHeader>
         <CardContent className="space-y-3">
-          {analysis.cardAvailability.map((card, index) => (
+          {filteredAnalysis.cardAvailability.map((card, index) => (
             <Card
               key={index}
               className={`${
@@ -132,26 +320,114 @@ function DeckAnalysisResults({ analysis }: DeckAnalysisResultsProps) {
               }`}
             >
               <CardContent className="p-4">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-3">
-                    {card.isFullyAvailable ? (
-                      <CheckCircleIcon className="h-5 w-5 text-green-600" />
+                <div className="flex items-start gap-4">
+                  {/* Card Image */}
+                  <div className="flex-shrink-0">
+                    {card.selectedPrinting ? (
+                      <img
+                        src={getCardThumbnail(card.selectedPrinting)}
+                        alt={card.cardName}
+                        className="w-20 h-28 object-cover rounded shadow-md"
+                        onError={(e) => {
+                          e.currentTarget.src = 'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iODAiIGhlaWdodD0iMTEyIiB2aWV3Qm94PSIwIDAgODAgMTEyIiBmaWxsPSJub25lIiB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciPjxyZWN0IHdpZHRoPSI4MCIgaGVpZ2h0PSIxMTIiIGZpbGw9IiNmM2Y0ZjYiIHJ4PSI0Ii8+PGNpcmNsZSBjeD0iNDAiIGN5PSI1NiIgcj0iMTYiIGZpbGw9IiM5Y2EzYWYiLz48cGF0aCBkPSJtMzIgNDggOCAxNiA4LTE2eiIgZmlsbD0iIzljYTNhZiIvPjwvc3ZnPg==';
+                        }}
+                      />
                     ) : (
-                      <XCircleIcon className="h-5 w-5 text-red-600" />
-                    )}
-                    <div>
-                      <div className="font-medium text-foreground">{card.cardName}</div>
-                      <div className="text-sm text-muted-foreground">
-                        Need: {card.requestedQuantity} • Available: {card.totalAvailable}
+                      <div className="w-20 h-28 bg-gray-200 rounded shadow-md flex items-center justify-center">
+                        <ImageIcon className="h-8 w-8 text-gray-400" />
                       </div>
-                    </div>
+                    )}
                   </div>
-                  <div className="text-right">
-                    <div className="font-medium text-foreground">
-                      {formatPrice(card.cheapestPrice)}
-                    </div>
-                    <div className="text-sm text-muted-foreground">
-                      {card.availableCards.length} listing{card.availableCards.length !== 1 ? 's' : ''}
+
+                  {/* Card Details */}
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-start justify-between">
+                      <div className="flex items-start gap-3 flex-1 min-w-0">
+                        {card.isFullyAvailable ? (
+                          <CheckCircleIcon className="h-5 w-5 text-green-600 mt-0.5 flex-shrink-0" />
+                        ) : (
+                          <XCircleIcon className="h-5 w-5 text-red-600 mt-0.5 flex-shrink-0" />
+                        )}
+                        <div className="flex-1 min-w-0">
+                          <div className="font-medium text-foreground">
+                            <button
+                              onClick={() => handleCardClick(card)}
+                              className="hover:underline cursor-pointer text-left"
+                            >
+                              {card.cardName}
+                            </button>
+                          </div>
+                          <div className="text-sm text-muted-foreground">
+                            Need: {card.requestedQuantity} • Available: {card.totalAvailable}
+                          </div>
+                          
+                          {/* Copy Selection */}
+                          {card.allPrintings && card.allPrintings.length > 1 && (
+                            <div className="mt-2">
+                              <Select
+                                value={card.selectedPrinting?.id || ''}
+                                onValueChange={(printingId) => {
+                                  const printing = card.allPrintings?.find(p => p.id === printingId);
+                                  if (printing) {
+                                    handlePrintingSelect(index, printing);
+                                  }
+                                }}
+                              >
+                                <SelectTrigger className="w-full h-8 text-xs">
+                                  <SelectValue placeholder="Select printing" />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  {card.allPrintings.map((printing) => (
+                                    <SelectItem 
+                                      key={printing.id} 
+                                      value={printing.id}
+                                      onMouseEnter={(e) => handlePrintingHover(printing, e)}
+                                      onMouseLeave={() => handlePrintingHover(null)}
+                                    >
+                                      <div className="flex items-center gap-2">
+                                        <span className="font-mono text-xs">{printing.set.toUpperCase()}</span>
+                                        <span>{printing.set_name}</span>
+                                        <Badge variant="outline" className="text-xs">
+                                          {printing.rarity}
+                                        </Badge>
+                                      </div>
+                                    </SelectItem>
+                                  ))}
+                                </SelectContent>
+                              </Select>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Pricing Section */}
+                      <div className="text-right flex-shrink-0 ml-4">
+                        {/* Outpost Price */}
+                        <div className="mb-2">
+                          <div className="text-sm font-medium text-green-700">Outpost</div>
+                          <div className="font-bold text-green-600">
+                            {formatPrice(card.cheapestPrice)}
+                          </div>
+                          <div className="text-xs text-muted-foreground">
+                            {card.availableCards.length} listing{card.availableCards.length !== 1 ? 's' : ''}
+                          </div>
+                        </div>
+
+                        {/* Market Price */}
+                        {card.marketPrice && (
+                          <div>
+                            <div className="text-sm font-medium text-blue-700">Market</div>
+                            <div className="font-bold text-blue-600">
+                              {formatPrice(card.marketPrice)}
+                            </div>
+                            {card.marketPriceFoil && card.marketPriceFoil !== card.marketPrice && (
+                              <div className="text-xs text-blue-500">
+                                Foil: {formatPrice(card.marketPriceFoil)}
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -206,6 +482,32 @@ function DeckAnalysisResults({ analysis }: DeckAnalysisResultsProps) {
           ))}
         </CardContent>
       </Card>
+
+      {/* Card Detail Modal */}
+      {selectedCard && (
+        <CardDetailModal
+          card={selectedCard}
+          isOpen={isModalOpen}
+          onClose={() => setIsModalOpen(false)}
+        />
+      )}
+
+      {/* Hover Image */}
+      {hoveredCard && (
+        <div
+          className="fixed z-50 pointer-events-none"
+          style={{
+            left: hoveredPosition.x + 10,
+            top: hoveredPosition.y + 10,
+          }}
+        >
+          <img
+            src={getCardThumbnail(hoveredCard)}
+            alt={hoveredCard.name}
+            className="w-32 h-auto rounded shadow-lg"
+          />
+        </div>
+      )}
     </div>
   );
 }
@@ -261,6 +563,7 @@ export default function DeckAnalysis() {
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [matchCardStyle, setMatchCardStyle] = useState(false);
+  const [excludeBasicLands, setExcludeBasicLands] = useState(false);
 
   const handleAnalyzeDeck = async () => {
     if (!deckListText.trim()) {
@@ -408,7 +711,7 @@ Each line should have: quantity, card name, optional set info, optional *F* for 
       )}
 
       {/* Analysis Results */}
-      {deckAnalysis && <DeckAnalysisResults analysis={deckAnalysis} />}
+      {deckAnalysis && <DeckAnalysisResults analysis={deckAnalysis} excludeBasicLands={excludeBasicLands} />}
 
       {/* Empty State */}
       {!currentDeck && !deckAnalysis && (
@@ -455,6 +758,31 @@ Each line should have: quantity, card name, optional set info, optional *F* for 
           </p>
         </CardContent>
       </Card>
+
+      {/* Exclude Basic Lands Toggle */}
+      <Card>
+        <CardHeader>
+          <CardTitle>Basic Lands</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="flex items-center space-x-3">
+            <Checkbox
+              id="exclude-basic-lands"
+              checked={excludeBasicLands}
+              onCheckedChange={(checked) => setExcludeBasicLands(!!checked)}
+              className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
+            />
+            <label htmlFor="exclude-basic-lands" className="text-sm font-medium text-gray-700">
+              Exclude basic lands from availability and market value calculations
+            </label>
+          </div>
+          <p className="text-xs text-gray-500 mt-2">
+            Basic lands (Plains, Island, Swamp, Mountain, Forest, Wastes) are often available in large quantities and have low market value.
+            Excluding them can give a more accurate representation of the market for other cards.
+          </p>
+        </CardContent>
+      </Card>
+
     </div>
   );
 } 
